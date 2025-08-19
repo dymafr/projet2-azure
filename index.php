@@ -1,59 +1,70 @@
 <?php
-// --- Configuration ---
-$accountName = "globalsharestorage13"; // REMPLACEZ PAR LE NOM DE VOTRE COMPTE DE STOCKAGE
-$containerName = "photos";
-// --- Fin de la configuration ---
+// tous les commentaires sont en français
+// attention : le sdk php azure storage est en mode maintenance ; cette version fonctionne avec une `connection string`
 
-// Fonction pour obtenir un jeton d'authentification via l'Identité Managée
-function getManagedIdentityToken() {
-    $url = getenv("IDENTITY_ENDPOINT") . "?resource=https://storage.azure.com/&api-version=2019-08-01";
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ["X-IDENTITY-HEADER: " . getenv("IDENTITY_HEADER")]);
-    $response = curl_exec($ch);
-    curl_close($ch);
-    $data = json_decode($response);
-    return $data->access_token;
-}
+require_once 'vendor/autoload.php';
+
+use MicrosoftAzure\Storage\Blob\BlobRestProxy;
+use MicrosoftAzure\Storage\Blob\Models\CreateBlockBlobOptions;
+use MicrosoftAzure\Storage\Blob\Models\ListBlobsOptions;
+use MicrosoftAzure\Storage\Common\Exceptions\ServiceException;
+
+// --- configuration ---
+// bonne pratique : définir la variable d’environnement `AZURE_STORAGE_CONNECTION_STRING` dans l’app service
+$connectionString = getenv('AZURE_STORAGE_CONNECTION_STRING') ?: '';
+$containerName = 'photos';
+// --- fin configuration ---
 
 $uploadMessage = '';
+$blobClient = null;
 
-// Gérer le téléversement de fichier
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['fileToUpload'])) {
-    $fileName = basename($_FILES['fileToUpload']['name']);
-    $fileContent = file_get_contents($_FILES['fileToUpload']['tmp_name']);
-    $fileSize = strlen($fileContent);
+try {
+    if ($connectionString === '') {
+        throw new \RuntimeException("variable d'environnement non définie : AZURE_STORAGE_CONNECTION_STRING");
+    }
+    // initialisation du client blob via la connection string
+    $blobClient = BlobRestProxy::createBlobService($connectionString);
+} catch (\Throwable $e) {
+    // on mémorise le message d’erreur pour l’afficher dans la page
+    $uploadMessage = "<p style='color: red;'>erreur d'initialisation : " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p>";
+}
 
-    $token = getManagedIdentityToken();
-    $blobUrl = "https://{$accountName}.blob.core.windows.net/{$containerName}/{$fileName}";
-    $date = gmdate('D, d M Y H:i:s T');
+// petite fonction utilitaire : validation basique des images
+function isValidImageUpload(array $file): bool {
+    if (!isset($file['error']) || $file['error'] !== UPLOAD_ERR_OK) return false;
+    if (!isset($file['type']) || !isset($file['tmp_name'])) return false;
 
-    // Préparation de la requête PUT pour téléverser le blob, avec les en-têtes requis par l'API Azure Storage
-    $headers = [
-        'Authorization: Bearer ' . $token,
-        'x-ms-version: 2020-04-08',
-        'x-ms-date: ' . $date,
-        'x-ms-blob-type: BlockBlob',
-        'Content-Length: ' . $fileSize,
-        'Content-Type: ' . $_FILES['fileToUpload']['type']
-    ];
+    // liste blanche des types mime courants
+    $allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!in_array($file['type'], $allowed, true)) return false;
 
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $blobUrl);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PUT");
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $fileContent);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    // vérification rapide du contenu réel
+    $imageInfo = @getimagesize($file['tmp_name']);
+    return $imageInfo !== false;
+}
 
-    curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+// gestion du téléversement
+if ($blobClient && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['fileToUpload'])) {
+    if (isValidImageUpload($_FILES['fileToUpload'])) {
+        $originalName = $_FILES['fileToUpload']['name'];
+        // on neutralise le nom pour éviter l’injection dans l’url/chemin
+        $safeName = preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName);
+        // option : préfixer par un horodatage pour éviter les collisions
+        $fileName = date('Ymd_His') . '_' . $safeName;
 
-    if ($http_code >= 200 && $http_code < 300) {
-        $uploadMessage = "<p style='color: green;'>Fichier '$fileName' téléversé avec succès !</p>";
+        $fileContent = file_get_contents($_FILES['fileToUpload']['tmp_name']);
+
+        $options = new CreateBlockBlobOptions();
+        $options->setContentType($_FILES['fileToUpload']['type']);
+
+        try {
+            $blobClient->createBlockBlob($containerName, $fileName, $fileContent, $options);
+            $uploadMessage = "<p style='color: green;'>fichier « " . htmlspecialchars($originalName, ENT_QUOTES, 'UTF-8') . " » téléversé avec succès</p>";
+        } catch (ServiceException $e) {
+            $uploadMessage = "<p style='color: red;'>erreur lors du téléversement : " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p>";
+        }
     } else {
-        $uploadMessage = "<p style='color: red;'>Erreur lors du téléversement (Code: $http_code)</p>";
+        $uploadMessage = "<p style='color: red;'>fichier invalide : seuls les formats jpeg, png, gif et webp sont acceptés</p>";
     }
 }
 ?>
@@ -67,59 +78,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['fileToUpload'])) {
         h1, h2 { color: #0078D4; }
         .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 20px; }
-        .gallery img { width: 100%; height: auto; border-radius: 4px; border: 1px solid #ddd; }
+        .gallery .item { padding: 8px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa; }
+        .name { font-size: 14px; word-break: break-all; margin: 6px 0 0; }
         form { margin-bottom: 30px; }
+        .hint { font-size: 12px; color: #555; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>GlobalShare - Votre galerie photo</h1>
+<div class="container">
+    <h1>GlobalShare - votre galerie photo</h1>
 
-        <form action="index.php" method="post" enctype="multipart/form-data">
-            <h2>Téléverser une nouvelle image</h2>
-            <input type="file" name="fileToUpload" id="fileToUpload" required>
-            <input type="submit" value="Téléverser l'image" name="submit">
-        </form>
+    <form action="index.php" method="post" enctype="multipart/form-data">
+        <h2>téléverser une nouvelle image</h2>
+        <input type="file" name="fileToUpload" id="fileToUpload" accept="image/*" required>
+        <input type="submit" value="téléverser l'image" name="submit">
+        <p class="hint">les images sont stockées dans un conteneur privé : elles ne sont pas accessibles publiquement sans url sas</p>
+    </form>
 
-        <?php echo $uploadMessage; ?>
+    <?php echo $uploadMessage; ?>
 
-        <h2>Photos téléversées</h2>
-        <div class="gallery">
-            <?php
-            // Lister les blobs en appelant l'API REST de manière authentifiée
-            $token = getManagedIdentityToken();
-            $listUrl = "https://{$accountName}.blob.core.windows.net/{$containerName}?restype=container&comp=list";
-            $date = gmdate('D, d M Y H:i:s T');
-            $headers = [
-                'Authorization: Bearer ' . $token,
-                'x-ms-version: 2020-04-08',
-                'x-ms-date: ' . $date
-            ];
+    <h2>photos téléversées</h2>
+    <div class="gallery">
+        <?php
+        if ($blobClient) {
+            try {
+                $listBlobsOptions = new ListBlobsOptions();
+                $listBlobsOptions->setMaxResults(100); // simple pagination : limite à 100
+                $result = $blobClient->listBlobs($containerName, $listBlobsOptions);
+                $blobs = $result->getBlobs();
 
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, $listUrl);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-            $xmlResponse = curl_exec($ch);
-            curl_close($ch);
-
-            if ($xmlResponse) {
-                $xml = simplexml_load_string($xmlResponse);
-                if ($xml->Blobs->Blob) {
-                    foreach ($xml->Blobs->Blob as $blob) {
-                        $blobName = (string)$blob->Name;
-                        // Pour chaque blob, on génère une balise <img> qui pointe vers notre script image.php
-                        // Cela permet au serveur de récupérer l'image de manière sécurisée et de la servir au client.
-                        echo '<img src="image.php?name=' . urlencode($blobName) . '" alt="' . htmlspecialchars($blobName) . '">';
+                if ($blobs && count($blobs) > 0) {
+                    foreach ($blobs as $blob) {
+                        // rappel : le conteneur est privé ; on affiche uniquement le nom
+                        echo '<div class="item">';
+                        echo '<div class="name">' . htmlspecialchars($blob->getName(), ENT_QUOTES, 'UTF-8') . '</div>';
+                        echo '</div>';
                     }
                 } else {
-                    echo "<p>Aucune photo n'a encore été téléversée.</p>";
+                    echo "<p>aucune photo n'a encore été téléversée</p>";
                 }
-            } else {
-                echo "<p style='color: red;'>Erreur lors de la récupération des images.</p>";
+            } catch (ServiceException $e) {
+                echo "<p style='color: red;'>erreur lors de la récupération des images : " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p>";
             }
-            ?>
-        </div>
+        } else {
+            echo "<p style='color: red;'>client non initialisé : vérifiez la variable d'environnement</p>";
+        }
+        ?>
     </div>
+</div>
 </body>
 </html>
