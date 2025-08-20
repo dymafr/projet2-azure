@@ -11,7 +11,7 @@ use MicrosoftAzure\Storage\Common\Exceptions\ServiceException;
 
 // --- configuration ---
 // bonne pratique : définir la variable d’environnement `AZURE_STORAGE_CONNECTION_STRING` dans l’app service
-$connectionString = 'globalsharestorage13';
+$connectionString = getenv('AZURE_STORAGE_CONNECTION_STRING') ?: '';
 $containerName = 'photos';
 // --- fin configuration ---
 
