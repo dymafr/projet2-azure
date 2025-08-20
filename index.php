@@ -11,7 +11,7 @@ use MicrosoftAzure\Storage\Blob\Models\ListBlobsOptions;
 use MicrosoftAzure\Storage\Common\Exceptions\ServiceException;
 
 // --- configuration ---
-$accountName   = getenv('AZURE_STORAGE_ACCOUNT') ?: 'votre_nom_de_compte'; // remplace si besoin
+$accountName   = getenv('AZURE_STORAGE_ACCOUNT') ?: 'globalsharestorage13'; // remplace si besoin
 $containerName = 'photos';
 // --- fin configuration ---
 
