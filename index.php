@@ -11,7 +11,7 @@ use MicrosoftAzure\Storage\Blob\Models\ListBlobsOptions;
 use MicrosoftAzure\Storage\Common\Exceptions\ServiceException;
 
 // --- configuration de base ---
-$accountName   = getenv('AZURE_STORAGE_ACCOUNT') ?: 'votre_nom_de_compte'; // remplace par le nom exact du compte
+$accountName   = 'globalsharestorage13'; // remplace par le nom exact du compte
 $containerName = 'photos';
 
 // sécurité : limite la taille des fichiers (exemple 8 Mo)
