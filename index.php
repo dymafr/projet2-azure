@@ -8,6 +8,9 @@ use MicrosoftAzure\Storage\Blob\BlobRestProxy;
 use MicrosoftAzure\Storage\Blob\Models\CreateBlockBlobOptions;
 use MicrosoftAzure\Storage\Blob\Models\ListBlobsOptions;
 use MicrosoftAzure\Storage\Common\Exceptions\ServiceException;
+use MicrosoftAzure\Storage\Common\Internal\Resources;
+use MicrosoftAzure\Storage\Common\Internal\StorageServiceSettings;
+use MicrosoftAzure\Storage\Blob\Internal\SharedAccessSignatureHelper;
 
 // --- configuration ---
 // bonne pratique : définir la variable d’environnement `AZURE_STORAGE_CONNECTION_STRING` dans l’app service
@@ -17,13 +20,15 @@ $containerName = 'photos';
 
 $uploadMessage = '';
 $blobClient = null;
+$storageSettings = null;
 
 try {
     if ($connectionString === '') {
         throw new \RuntimeException("variable d'environnement non définie : AZURE_STORAGE_CONNECTION_STRING");
     }
-    // initialisation du client blob via la connection string
+    // initialisation du client blob et des paramètres de stockage
     $blobClient = BlobRestProxy::createBlobService($connectionString);
+    $storageSettings = StorageServiceSettings::createFromConnectionString($connectionString);
 } catch (\Throwable $e) {
     // on mémorise le message d’erreur pour l’afficher dans la page
     $uploadMessage = "<p style='color: red;'>erreur d'initialisation : " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p>";
@@ -78,8 +83,7 @@ if ($blobClient && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['fileT
         h1, h2 { color: #0078D4; }
         .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 20px; }
-        .gallery .item { padding: 8px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa; }
-        .name { font-size: 14px; word-break: break-all; margin: 6px 0 0; }
+        .gallery img { width: 100%; height: auto; border-radius: 4px; border: 1px solid #ddd; }
         form { margin-bottom: 30px; }
         .hint { font-size: 12px; color: #555; }
     </style>
@@ -100,19 +104,30 @@ if ($blobClient && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['fileT
     <h2>photos téléversées</h2>
     <div class="gallery">
         <?php
-        if ($blobClient) {
+        if ($blobClient && $storageSettings) {
             try {
                 $listBlobsOptions = new ListBlobsOptions();
-                $listBlobsOptions->setMaxResults(100); // simple pagination : limite à 100
+                $listBlobsOptions->setMaxResults(100);
                 $result = $blobClient->listBlobs($containerName, $listBlobsOptions);
                 $blobs = $result->getBlobs();
 
                 if ($blobs && count($blobs) > 0) {
+                    $sasHelper = new SharedAccessSignatureHelper(
+                        $storageSettings->getName(),
+                        $storageSettings->getKey()
+                    );
+
                     foreach ($blobs as $blob) {
-                        // rappel : le conteneur est privé ; on affiche uniquement le nom
-                        echo '<div class="item">';
-                        echo '<div class="name">' . htmlspecialchars($blob->getName(), ENT_QUOTES, 'UTF-8') . '</div>';
-                        echo '</div>';
+                        $blobName = $blob->getName();
+                        // Génération d'une URL SAS valide pour 5 minutes
+                        $sasToken = $sasHelper->generateBlobServiceSharedAccessSignatureToken(
+                            Resources::RESOURCE_TYPE_BLOB,
+                            "$containerName/$blobName",
+                            'r', // 'r' pour la permission de lecture (read)
+                            (new DateTime())->add(new DateInterval('PT5M'))
+                        );
+                        $imageUrl = $blob->getUrl() . '?' . $sasToken;
+                        echo '<img src="' . htmlspecialchars($imageUrl, ENT_QUOTES, 'UTF-8') . '" alt="' . htmlspecialchars($blobName, ENT_QUOTES, 'UTF-8') . '">';
                     }
                 } else {
                     echo "<p>aucune photo n'a encore été téléversée</p>";
