@@ -132,39 +132,71 @@ if ($blobClient && isset($_GET['download'])) {
     exit;
 }
 
-// traitement de l'upload
-if (
-    $blobClient
+// tous les commentaires sont en français.
+// traitement upload robuste
+
+if ($blobClient
     && $_SERVER['REQUEST_METHOD'] === 'POST'
     && isset($_FILES['fileToUpload'])
-    && $_FILES['fileToUpload']['error'] === UPLOAD_ERR_OK
 ) {
-    $fileName    = basename($_FILES['fileToUpload']['name']);
-    $fileTmpPath = $_FILES['fileToUpload']['tmp_name'];
-    $fileSize    = (int)($_FILES['fileToUpload']['size'] ?? 0);
+    $err = $_FILES['fileToUpload']['error'] ?? UPLOAD_ERR_NO_FILE;
 
-    // validations basiques sécurité
-    $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
-    if (!in_array($ext, $allowedExt, true)) {
-        $uploadMessage = "<p style='color: red;'>extension non autorisée.</p>";
-    } elseif ($fileSize > $maxBytes) {
-        $uploadMessage = "<p style='color: red;'>fichier trop volumineux.</p>";
+    if ($err !== UPLOAD_ERR_OK) {
+        // messages d'erreur clairs selon le code php
+        $map = [
+            UPLOAD_ERR_INI_SIZE   => "fichier trop volumineux selon upload_max_filesize.",
+            UPLOAD_ERR_FORM_SIZE  => "fichier trop volumineux selon MAX_FILE_SIZE.",
+            UPLOAD_ERR_PARTIAL    => "téléversement partiel, réessaie.",
+            UPLOAD_ERR_NO_FILE    => "aucun fichier reçu.",
+            UPLOAD_ERR_NO_TMP_DIR => "dossier temporaire manquant côté serveur.",
+            UPLOAD_ERR_CANT_WRITE => "écriture impossible sur le disque temporaire.",
+            UPLOAD_ERR_EXTENSION  => "téléversement interrompu par une extension.",
+        ];
+        $uploadMessage = "<p style='color: red;'>" . ($map[$err] ?? "erreur inconnue de téléversement.") . "</p>";
     } else {
-        // force un nom unique : uuid simple + extension
-        $safeName = bin2hex(random_bytes(16)) . '.' . $ext;
+        $fileTmpPath = $_FILES['fileToUpload']['tmp_name'] ?? '';
+        $origName    = $_FILES['fileToUpload']['name'] ?? 'fichier';
+        $mimeType    = $_FILES['fileToUpload']['type'] ?: 'application/octet-stream';
+        $sizeBytes   = (int)($_FILES['fileToUpload']['size'] ?? 0);
 
-        $options = new CreateBlockBlobOptions();
-        $options->setContentType($_FILES['fileToUpload']['type'] ?: 'application/octet-stream');
+        // vérifications élémentaires
+        if (!is_uploaded_file($fileTmpPath)) {
+            $uploadMessage = "<p style='color: red;'>le fichier n'est pas un téléversement valide.</p>";
+        } elseif ($sizeBytes <= 0) {
+            $uploadMessage = "<p style='color: red;'>taille de fichier invalide.</p>";
+        } else {
+            // extension et nom sûrs
+            $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
+            $allowedExt = ['jpg','jpeg','png','gif','webp'];
+            if (!in_array($ext, $allowedExt, true)) {
+                $uploadMessage = "<p style='color: red;'>extension non autorisée.</p>";
+            } else {
+                $safeName = bin2hex(random_bytes(16)) . '.' . $ext;
 
-        try {
-            $stream = fopen($fileTmpPath, 'rb');
-            $blobClient->createBlockBlob($containerName, $safeName, $stream, $options);
-            fclose($stream);
-            $uploadMessage = "<p style='color: green;'>image téléversée avec succès.</p>";
-        } catch (ServiceException $e) {
-            $uploadMessage = "<p style='color: red;'>erreur lors du téléversement : " . htmlspecialchars($e->getMessage()) . "</p>";
-        } catch (\Throwable $e) {
-            $uploadMessage = "<p style='color: red;'>erreur inattendue : " . htmlspecialchars($e->getMessage()) . "</p>";
+                $options = new CreateBlockBlobOptions();
+                $options->setContentType($mimeType ?: 'application/octet-stream');
+
+                // ouvre le flux de lecture
+                $stream = @fopen($fileTmpPath, 'rb');
+                if ($stream === false) {
+                    $uploadMessage = "<p style='color: red;'>impossible d'ouvrir le fichier temporaire en lecture.</p>";
+                } else {
+                    try {
+                        // envoie le flux au blob storage
+                        $blobClient->createBlockBlob($containerName, $safeName, $stream, $options);
+                        $uploadMessage = "<p style='color: green;'>image téléversée avec succès.</p>";
+                    } catch (ServiceException $e) {
+                        $uploadMessage = "<p style='color: red;'>erreur lors du téléversement : " . htmlspecialchars($e->getMessage()) . "</p>";
+                    } catch (\Throwable $e) {
+                        $uploadMessage = "<p style='color: red;'>erreur inattendue : " . htmlspecialchars($e->getMessage()) . "</p>";
+                    } finally {
+                        // ne ferme que si c'est encore une ressource valide
+                        if (is_resource($stream)) {
+                            fclose($stream);
+                        }
+                    }
+                }
+            }
         }
     }
 }
