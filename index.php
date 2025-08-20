@@ -1,7 +1,4 @@
 <?php
-// tous les commentaires sont en français
-// attention : le sdk php azure storage est en mode maintenance ; cette version fonctionne avec une `connection string`
-
 require_once 'vendor/autoload.php';
 
 use MicrosoftAzure\Storage\Blob\BlobRestProxy;
@@ -13,7 +10,6 @@ use MicrosoftAzure\Storage\Common\Internal\StorageServiceSettings;
 use MicrosoftAzure\Storage\Blob\Internal\SharedAccessSignatureHelper;
 
 // --- configuration ---
-// bonne pratique : définir la variable d’environnement `AZURE_STORAGE_CONNECTION_STRING` dans l’app service
 $connectionString = getenv('AZURE_STORAGE_CONNECTION_STRING') ?: '';
 $containerName = 'photos';
 // --- fin configuration ---
@@ -24,52 +20,40 @@ $storageSettings = null;
 
 try {
     if ($connectionString === '') {
-        throw new \RuntimeException("variable d'environnement non définie : AZURE_STORAGE_CONNECTION_STRING");
+        throw new \RuntimeException("Variable d'environnement non définie : AZURE_STORAGE_CONNECTION_STRING");
     }
-    // initialisation du client blob et des paramètres de stockage
     $blobClient = BlobRestProxy::createBlobService($connectionString);
     $storageSettings = StorageServiceSettings::createFromConnectionString($connectionString);
 } catch (\Throwable $e) {
-    // on mémorise le message d’erreur pour l’afficher dans la page
-    $uploadMessage = "<p style='color: red;'>erreur d'initialisation : " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p>";
+    $uploadMessage = "<p style='color: red;'>Erreur d'initialisation : " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p>";
 }
 
-// petite fonction utilitaire : validation basique des images
 function isValidImageUpload(array $file): bool {
     if (!isset($file['error']) || $file['error'] !== UPLOAD_ERR_OK) return false;
     if (!isset($file['type']) || !isset($file['tmp_name'])) return false;
-
-    // liste blanche des types mime courants
     $allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
     if (!in_array($file['type'], $allowed, true)) return false;
-
-    // vérification rapide du contenu réel
     $imageInfo = @getimagesize($file['tmp_name']);
     return $imageInfo !== false;
 }
 
-// gestion du téléversement
 if ($blobClient && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['fileToUpload'])) {
     if (isValidImageUpload($_FILES['fileToUpload'])) {
         $originalName = $_FILES['fileToUpload']['name'];
-        // on neutralise le nom pour éviter l’injection dans l’url/chemin
         $safeName = preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName);
-        // option : préfixer par un horodatage pour éviter les collisions
         $fileName = date('Ymd_His') . '_' . $safeName;
-
         $fileContent = file_get_contents($_FILES['fileToUpload']['tmp_name']);
-
         $options = new CreateBlockBlobOptions();
         $options->setContentType($_FILES['fileToUpload']['type']);
 
         try {
             $blobClient->createBlockBlob($containerName, $fileName, $fileContent, $options);
-            $uploadMessage = "<p style='color: green;'>fichier « " . htmlspecialchars($originalName, ENT_QUOTES, 'UTF-8') . " » téléversé avec succès</p>";
+            $uploadMessage = "<p style='color: green;'>Fichier « " . htmlspecialchars($originalName, ENT_QUOTES, 'UTF-8') . " » téléversé avec succès</p>";
         } catch (ServiceException $e) {
-            $uploadMessage = "<p style='color: red;'>erreur lors du téléversement : " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p>";
+            $uploadMessage = "<p style='color: red;'>Erreur lors du téléversement : " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p>";
         }
     } else {
-        $uploadMessage = "<p style='color: red;'>fichier invalide : seuls les formats jpeg, png, gif et webp sont acceptés</p>";
+        $uploadMessage = "<p style='color: red;'>Fichier invalide : seuls les formats jpeg, png, gif et webp sont acceptés</p>";
     }
 }
 ?>
