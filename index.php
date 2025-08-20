@@ -99,35 +99,29 @@ try {
 }
 
 // route de streaming : index.php?download=<nom_du_blob>
+// tous les commentaires sont en français.
+// route de streaming : ?download=nom_du_blob
 if ($blobClient && isset($_GET['download'])) {
     $blobName = basename($_GET['download']); // évite la traversée de chemins
     try {
-        $blob    = $blobClient->getBlob($containerName, $blobName);
-        $props   = $blob->getProperties();
-        $stream  = $blob->getContentStream();
+        $blob   = $blobClient->getBlob($containerName, $blobName);
+        $props  = $blob->getProperties();
+        $stream = $blob->getContentStream(); // ne pas fermer explicitement ce flux
 
-        // en-têtes http pour un rendu image correct et un cache léger
         header('Content-Type: ' . ($props->getContentType() ?: 'application/octet-stream'));
-        if ($props->getContentLength() !== null) {
-            header('Content-Length: ' . $props->getContentLength());
-        }
+        if ($props->getContentLength() !== null) header('Content-Length: ' . $props->getContentLength());
         if ($props->getLastModified() !== null) {
             header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $props->getLastModified()->getTimestamp()) . ' GMT');
         }
-        if ($props->getETag()) {
-            header('ETag: ' . $props->getETag());
-        }
-        header('Cache-Control: private, max-age=300'); // 5 min
+        if ($props->getETag()) header('ETag: ' . $props->getETag());
+        header('Cache-Control: private, max-age=300');
         header('Content-Disposition: inline; filename="' . addslashes($blobName) . '"');
 
-        // stream sans charger tout en mémoire
+        // on envoie tout le flux ; pas de fclose ici
         fpassthru($stream);
-    } catch (ServiceException $e) {
+    } catch (\Throwable $e) {
         http_response_code(404);
         echo "introuvable : " . htmlspecialchars($e->getMessage());
-    } catch (\Throwable $e) {
-        http_response_code(500);
-        echo "erreur interne : " . htmlspecialchars($e->getMessage());
     }
     exit;
 }
@@ -135,14 +129,14 @@ if ($blobClient && isset($_GET['download'])) {
 // tous les commentaires sont en français.
 // traitement upload robuste
 
+// tous les commentaires sont en français.
+// traitement upload robuste
 if ($blobClient
     && $_SERVER['REQUEST_METHOD'] === 'POST'
     && isset($_FILES['fileToUpload'])
 ) {
     $err = $_FILES['fileToUpload']['error'] ?? UPLOAD_ERR_NO_FILE;
-
     if ($err !== UPLOAD_ERR_OK) {
-        // messages d'erreur clairs selon le code php
         $map = [
             UPLOAD_ERR_INI_SIZE   => "fichier trop volumineux selon upload_max_filesize.",
             UPLOAD_ERR_FORM_SIZE  => "fichier trop volumineux selon MAX_FILE_SIZE.",
@@ -159,13 +153,9 @@ if ($blobClient
         $mimeType    = $_FILES['fileToUpload']['type'] ?: 'application/octet-stream';
         $sizeBytes   = (int)($_FILES['fileToUpload']['size'] ?? 0);
 
-        // vérifications élémentaires
-        if (!is_uploaded_file($fileTmpPath)) {
+        if (!is_uploaded_file($fileTmpPath) || $sizeBytes <= 0) {
             $uploadMessage = "<p style='color: red;'>le fichier n'est pas un téléversement valide.</p>";
-        } elseif ($sizeBytes <= 0) {
-            $uploadMessage = "<p style='color: red;'>taille de fichier invalide.</p>";
         } else {
-            // extension et nom sûrs
             $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
             $allowedExt = ['jpg','jpeg','png','gif','webp'];
             if (!in_array($ext, $allowedExt, true)) {
@@ -173,26 +163,22 @@ if ($blobClient
             } else {
                 $safeName = bin2hex(random_bytes(16)) . '.' . $ext;
 
-                $options = new CreateBlockBlobOptions();
+                $options = new MicrosoftAzure\Storage\Blob\Models\CreateBlockBlobOptions();
                 $options->setContentType($mimeType ?: 'application/octet-stream');
 
-                // ouvre le flux de lecture
                 $stream = @fopen($fileTmpPath, 'rb');
                 if ($stream === false) {
                     $uploadMessage = "<p style='color: red;'>impossible d'ouvrir le fichier temporaire en lecture.</p>";
                 } else {
                     try {
-                        // envoie le flux au blob storage
                         $blobClient->createBlockBlob($containerName, $safeName, $stream, $options);
                         $uploadMessage = "<p style='color: green;'>image téléversée avec succès.</p>";
-                    } catch (ServiceException $e) {
-                        $uploadMessage = "<p style='color: red;'>erreur lors du téléversement : " . htmlspecialchars($e->getMessage()) . "</p>";
                     } catch (\Throwable $e) {
-                        $uploadMessage = "<p style='color: red;'>erreur inattendue : " . htmlspecialchars($e->getMessage()) . "</p>";
+                        $uploadMessage = "<p style='color: red;'>erreur lors du téléversement : " . htmlspecialchars($e->getMessage()) . "</p>";
                     } finally {
-                        // ne ferme que si c'est encore une ressource valide
+                        // ne fermer que si c'est bien une ressource encore ouverte
                         if (is_resource($stream)) {
-                            fclose($stream);
+                            @fclose($stream);
                         }
                     }
                 }
@@ -200,6 +186,7 @@ if ($blobClient
         }
     }
 }
+
 ?>
 <!DOCTYPE html>
 <html lang="fr">
